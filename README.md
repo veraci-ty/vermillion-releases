@@ -17,6 +17,7 @@ Once installed, Vermillion updates itself: it checks for new versions every few 
 | **Alt+V** | Open or close the overlay |
 | **Alt+C** | Save the last 30 seconds |
 | **Alt+Shift+C** | Save the last 2 minutes |
+| **Alt+Shift+R** | Start or stop recording |
 
 All of them can be changed in Settings → Hotkeys.
 
