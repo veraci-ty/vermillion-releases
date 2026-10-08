@@ -1,0 +1,100 @@
+# Publishes a new Vermillion release whenever the version in the private source repo goes up.
+# Vermillion checks this repo's latest release and updates itself.
+#
+# Needs one secret: SOURCE_DEPLOY_KEY, the private half of a read-only deploy key on veraci-ty/vermillion.
+name: Release
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPO: git@github.com:veraci-ty/vermillion.git
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      build: ${{ steps.v.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Read the source version
+        id: v
+        env:
+          KEY: ${{ secrets.SOURCE_DEPLOY_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/key" && printf '%s\n' "$KEY" > "$RUNNER_TEMP/key"
+          export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 --quiet "$SOURCE_REPO" "$RUNNER_TEMP/src"
+          rm -f "$RUNNER_TEMP/key"
+          version=$(sed -nE 's/^__version__ *= *"([^"]+)".*/\1/p' "$RUNNER_TEMP/src/vermillion/__init__.py")
+          [ -n "$version" ] || { echo "::error::couldn't read __version__"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "build=false" >> "$GITHUB_OUTPUT"; echo "v$version is already released"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"; echo "v$version is new, building it"
+          fi
+
+      # GitHub turns off scheduled workflows in repos with no commits for 60 days
+      - name: Keep the schedule alive
+        run: |
+          last=$(git log -1 --format=%ct)
+          if [ $(( $(date +%s) - last )) -gt $(( 45 * 86400 )) ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "Keep the release schedule running"
+            git push
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Get the source
+        shell: bash
+        env:
+          KEY: ${{ secrets.SOURCE_DEPLOY_KEY }}
+        run: |
+          key="$(cygpath -u "$RUNNER_TEMP")/key"
+          printf '%s\n' "$KEY" > "$key" && chmod 600 "$key"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 --quiet "$SOURCE_REPO" src
+          rm -f "$key"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the app, portable zip and installer
+        shell: pwsh
+        working-directory: src
+        run: ./packaging/build.ps1
+
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          # release notes: the latest source commit message, without its trailer lines
+          git -C src log -1 --pretty=%B | grep -viE '^(co-authored-by|claude-session|signed-off-by):' > notes.md
+          ls -la src/dist
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --title "Vermillion $VERSION" \
+            --notes-file notes.md --latest \
+            "src/dist/VermillionSetup-$VERSION.exe" "src/dist/Vermillion-$VERSION-portable.zip"
