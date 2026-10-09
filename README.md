@@ -18,6 +18,8 @@ Once installed, Vermillion updates itself: it checks for new versions every few 
 | **Alt+C** | Save the last 30 seconds |
 | **Alt+Shift+C** | Save the last 2 minutes |
 | **Alt+Shift+R** | Start or stop recording |
+| **Alt+S** | Screenshot (freeze, select, draw, copy or save) |
+| **Alt+Shift+M** | Mute or unmute your mic in clips |
 
 All of them can be changed in Settings → Hotkeys.
 
